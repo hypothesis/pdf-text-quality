@@ -21,3 +21,12 @@ jobs:
         run: |
           pipenv run checkformat
           pipenv run typecheck
+
+      - name: Install dependencies
+      - run: |
+          sudo apt-get install -y poppler-utils tesseract
+
+      - name: Functional test
+      - run: |
+          pipenv run check-pdf test-data/dna-paper.pdf > /tmp/output
+          diff -u test-data/baselines/dna-paper.txt /tmp/output
