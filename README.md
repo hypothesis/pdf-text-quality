@@ -53,12 +53,13 @@ using a more modern/better-configured OCR tool.
 pipenv run check-pdf [args] <pdf_file>
 ```
 
-This will extract the text layer from pages in `pdf_file` and compare it against
-an OCR run over the same pages. For each page, a set of metrics is displayed.
-For example:
+This will check all pages in `pdf_file`. The range of pages to check can be
+adjusted using the `--first-page` and `--last-page` options.
+
+For each checked page, a set of metrics is displayed. For example:
 
 ```shellsession
-$ pipenv run check-pdf test-file.pdf
+$ pipenv run check-pdf test-data/implementing-quicksort.pdf --first-page=1 --last-page=5
 
 Checking text pages 1 to 5
 Page 1 IoU: iou: 0.73, iou_x: 0.96, iou_y: 0.76, iou_weighted: 0.90
@@ -95,8 +96,7 @@ Page 4 IoU: iou: 0.19, iou_x: 0.36, iou_y: 0.31, iou_weighted: 0.35
 Page 5 IoU: iou: 0.20, iou_x: 0.40, iou_y: 0.34, iou_weighted: 0.38
 ```
 
-The range of pages to check can be controlled using the `--first-page` and
-`--last-page` options. To see the full range of options, run:
+To see the full set of options, run:
 
 ```
 pipenv run check-pdf --help
