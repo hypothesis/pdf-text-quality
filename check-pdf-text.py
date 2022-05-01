@@ -400,7 +400,7 @@ def compute_iou_metrics(
     # it represents all areas of the page (ie. over-weight words from under-dense
     # regions) or filter out very large or very small words which may be
     # outliers in the OCR or PDF output.
-    sample_size = min(300, len(ocr_text_page.words))
+    sample_size = min(1000, len(ocr_text_page.words))
     ocr_words_subset = random.sample(ocr_text_page.words, sample_size)
 
     # Find an alignment between words in the OCR output and words in the PDF
