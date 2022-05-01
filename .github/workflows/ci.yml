@@ -15,6 +15,7 @@ jobs:
       - name: Install pipenv
         run: |
           pip install --upgrade pipenv
+          pipenv install --dev --deploy
 
       - name: Lint
         run: |
