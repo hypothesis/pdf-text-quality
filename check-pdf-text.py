@@ -388,8 +388,6 @@ def compute_iou_metrics(
 
     Returns a dict of metric name to value.
     """
-    # Compute score by finding an alignment between OCR and PDF text layer word
-    # boxes and computing an average match score over those.
     pdf_text_words = set(pdf_text_page.words)
 
     # Subset of OCR output which are considered when scoring the PDF text layer.
@@ -411,6 +409,7 @@ def compute_iou_metrics(
     for ocr_word in ocr_words_subset:
         best_pdf_word = None
         best_iou = 0.0
+
         for pdf_word in pdf_text_words:
             if (
                 pdf_word.box.top > ocr_word.box.bottom
@@ -468,10 +467,10 @@ def compute_iou_metrics(
     mean_iou_weighted = 0.7 * mean_iou_x + 0.3 * mean_iou_y
 
     return {
-        "mean_iou": mean_iou,
-        "mean_iou_x": mean_iou_x,
-        "mean_iou_y": mean_iou_y,
-        "mean_iou_weighted": mean_iou_weighted,
+        "iou": mean_iou,
+        "iou_x": mean_iou_x,
+        "iou_y": mean_iou_y,
+        "iou_weighted": mean_iou_weighted,
     }
 
 
