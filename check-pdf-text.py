@@ -547,9 +547,16 @@ def main():
         help="Number of first page to process",
     )
     parser.add_argument(
+        "--iou-metrics",
+        action=argparse.BooleanOptionalAction,
+        dest="iou_metrics",
+        default=True,
+    )
+    parser.add_argument(
         "--mask-metrics",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         dest="mask_metrics",
+        default=False,
     )
     parser.add_argument(
         "--last-page", type=int, dest="last_page", help="Number of last page to process"
@@ -581,7 +588,7 @@ def main():
                 page=page,
                 debug=args.debug,
                 mask_metric=args.mask_metrics,
-                iou_metric=True,
+                iou_metric=args.iou_metrics,
                 timing=args.timing,
             )
         except Exception as e:
