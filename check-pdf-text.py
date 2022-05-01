@@ -461,9 +461,11 @@ def compute_iou_metrics(
     # it can be affected by differences such as whether each box includes
     # ascenders and descenders.
 
-    mean_iou = iou_sum / len(ocr_words_subset)
-    mean_iou_x = iou_sum_x / len(ocr_words_subset)
-    mean_iou_y = iou_sum_y / len(ocr_words_subset)
+    epsilon = 0.00001  # Prevent divide-by-zero
+    sampled_word_count = len(ocr_words_subset) + epsilon
+    mean_iou = iou_sum / sampled_word_count
+    mean_iou_x = iou_sum_x / sampled_word_count
+    mean_iou_y = iou_sum_y / sampled_word_count
     mean_iou_weighted = 0.7 * mean_iou_x + 0.3 * mean_iou_y
 
     return {
