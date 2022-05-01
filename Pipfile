@@ -12,3 +12,6 @@ numpy = "*"
 
 [requires]
 python_version = "3.9"
+
+[scripts]
+check-pdf = "python check-pdf-text.py"
