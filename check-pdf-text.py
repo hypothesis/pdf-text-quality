@@ -9,6 +9,7 @@ import os
 import random
 import subprocess
 import sys
+import time
 import xml.etree.ElementTree as ElementTree
 
 import numpy as np
@@ -111,6 +112,27 @@ class TextWord:
 class TextPage:
     box: Rect
     words: list[TextWord]
+
+
+class Timer:
+    """
+    Utility for recording and reporting duration of steps in an operation.
+    """
+
+    def __init__(self):
+        self.checkpoints: list[tuple[str, float]] = []
+        self.last_checkpoint = time.monotonic()
+
+    def checkpoint(self, name: str):
+        checkpoint = time.monotonic()
+        delta = checkpoint - self.last_checkpoint
+        self.last_checkpoint = checkpoint
+        self.checkpoints.append((name, delta))
+
+    def print(self, description: str):
+        print(f"{description} timings:")
+        for event, delta in self.checkpoints:
+            print(f"  {event}: {delta}")
 
 
 def run_tool(command: str, args: list[str]):
@@ -476,28 +498,42 @@ def compute_mask_metric(
 
 
 def process_page(
-    pdf_renderer: PDFRenderer, page: int, debug=False, mask_metric=True, iou_metric=True
+    pdf_renderer: PDFRenderer,
+    page: int,
+    debug=False,
+    mask_metric=True,
+    iou_metric=True,
+    timing=False,
 ):
     """
     Extract the PDF text layer from a page and compare it against OCR output.
     """
+    t = Timer()
     image = pdf_renderer.render_to_image(page=page)
+    t.checkpoint("render_to_image")
     pdf_text_page = pdf_renderer.render_to_text(page=page)
+    t.checkpoint("render_to_text")
 
     ocr = OCR()
     ocr_text_page = ocr.run_ocr(image)
+    t.checkpoint("ocr")
 
     def print_metrics(name: str, metrics: dict[str, float]):
         formatted_metrics = [f"{key}: {value:.2f}" for key, value in metrics.items()]
-        print(f"Page {page} {name} metrics: ", ", ".join(formatted_metrics))
+        print(f"Page {page} {name}:", ", ".join(formatted_metrics))
 
     if mask_metric:
         mask_metrics = compute_mask_metric(pdf_text_page, ocr_text_page, debug=debug)
         print_metrics("mask", mask_metrics)
+        t.checkpoint("mask_metrics")
 
     if iou_metric:
         iou_metrics = compute_iou_metrics(pdf_text_page, ocr_text_page)
         print_metrics("IoU", iou_metrics)
+        t.checkpoint("iou_metrics")
+
+    if timing:
+        t.print("process_page")
 
 
 def main():
@@ -519,6 +555,9 @@ def main():
     )
     parser.add_argument(
         "--debug", action="store_true", dest="debug", help="Store debug outputs"
+    )
+    parser.add_argument(
+        "--timing", action="store_true", dest="timing", help="Print timing info"
     )
     args = parser.parse_args()
 
@@ -542,6 +581,7 @@ def main():
                 debug=args.debug,
                 mask_metric=args.mask_metrics,
                 iou_metric=True,
+                timing=args.timing,
             )
         except Exception as e:
             print(f"Error processing page {page}", repr(e), file=sys.stderr)
