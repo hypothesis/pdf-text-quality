@@ -13,7 +13,7 @@ import time
 import xml.etree.ElementTree as ElementTree
 
 import numpy as np
-from PIL import Image
+from PIL import Image  # type: ignore
 
 
 @dataclass(frozen=True)

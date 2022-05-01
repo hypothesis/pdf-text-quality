@@ -9,9 +9,14 @@ pillow = "*"
 numpy = "*"
 
 [dev-packages]
+black = "*"
+mypy = "*"
 
 [requires]
 python_version = "3.9"
 
 [scripts]
+checkformat = "black --check ."
+format = "black ."
+typecheck = "mypy ."
 check-pdf = "python check-pdf-text.py"
