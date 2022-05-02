@@ -488,6 +488,7 @@ def compute_mask_metric(
 
     text_page_mask = create_text_page_mask(pdf_text_page)
     ocr_text_page_mask = create_text_page_mask(ocr_text_page)
+
     match_score = compare_masks(text_page_mask, ocr_text_page_mask)
 
     if debug:
@@ -505,9 +506,11 @@ def process_page(
     mask_metric=True,
     iou_metric=True,
     timing=False,
-):
+) -> dict[str, float]:
     """
     Extract the PDF text layer from a page and compare it against OCR output.
+
+    Returns a dict of comparison metrics.
     """
     t = Timer()
     image = pdf_renderer.render_to_image(page=page)
@@ -519,27 +522,27 @@ def process_page(
     ocr_text_page = ocr.run_ocr(image)
     t.checkpoint("ocr")
 
-    def print_metrics(name: str, metrics: dict[str, float]):
-        formatted_metrics = [f"{key}: {value:.2f}" for key, value in metrics.items()]
-        print(f"Page {page} {name}:", ", ".join(formatted_metrics))
+    metrics: dict[str, float] = {}
 
     if mask_metric:
         mask_metrics = compute_mask_metric(pdf_text_page, ocr_text_page, debug=debug)
-        print_metrics("mask", mask_metrics)
+        metrics |= mask_metrics
         t.checkpoint("mask_metrics")
 
     if iou_metric:
         iou_metrics = compute_iou_metrics(pdf_text_page, ocr_text_page)
-        print_metrics("IoU", iou_metrics)
+        metrics |= iou_metrics
         t.checkpoint("iou_metrics")
 
     if timing:
         t.print("process_page")
 
+    return metrics
+
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("pdf_file", help="PDF file to check")
+    parser.add_argument("pdf_file", nargs="+", help="PDF file to check")
     parser.add_argument(
         "--first-page",
         type=int,
@@ -573,26 +576,47 @@ def main():
         os.makedirs("debug", exist_ok=True)
 
     dpi = 150
-    pdf_renderer = PDFRenderer(file_path=args.pdf_file, dpi=dpi)
 
-    page_count = pdf_renderer.count_pages()
-    first_page = args.first_page or 1
-    last_page = max(first_page, args.last_page or page_count)
+    for pdf_file in args.pdf_file:
+        pdf_renderer = PDFRenderer(file_path=pdf_file, dpi=dpi)
 
-    print(f"Checking text pages {first_page} to {last_page}")
-
-    for page in range(first_page, last_page + 1):
         try:
-            process_page(
-                pdf_renderer,
-                page=page,
-                debug=args.debug,
-                mask_metric=args.mask_metrics,
-                iou_metric=args.iou_metrics,
-                timing=args.timing,
-            )
+            page_count = pdf_renderer.count_pages()
         except Exception as e:
-            print(f"Error processing page {page}", repr(e), file=sys.stderr)
+            print(f"Error counting pages in {pdf_file}", repr(e))
+            continue
+
+        first_page = args.first_page or 1
+        first_page = min(max(first_page, 1), page_count)
+
+        last_page = args.last_page or page_count
+        last_page = min(max(last_page, first_page), page_count)
+
+        file_basename = os.path.basename(pdf_file)
+
+        print(f'Checking text pages {first_page} to {last_page} in "{file_basename}"')
+
+        for page in range(first_page, last_page + 1):
+            try:
+                metrics = process_page(
+                    pdf_renderer,
+                    page=page,
+                    debug=args.debug,
+                    mask_metric=args.mask_metrics,
+                    iou_metric=args.iou_metrics,
+                    timing=args.timing,
+                )
+                formatted_metrics = [
+                    f"{key}: {value:.2f}" for key, value in metrics.items()
+                ]
+                print(f"Page {page}:", ", ".join(formatted_metrics))
+
+            except Exception as e:
+                print(
+                    f"Error processing page {page} in {pdf_file}",
+                    repr(e),
+                    file=sys.stderr,
+                )
 
 
 if __name__ == "__main__":

@@ -1,3 +1,3 @@
-Checking text pages 1 to 2
-Page 1 IoU: iou: 0.75, iou_x: 0.97, iou_y: 0.77, iou_weighted: 0.91
-Page 2 IoU: iou: 0.75, iou_x: 0.95, iou_y: 0.78, iou_weighted: 0.90
+Checking text pages 1 to 2 in "dna-paper.pdf"
+Page 1: iou: 0.75, iou_x: 0.97, iou_y: 0.77, iou_weighted: 0.91
+Page 2: iou: 0.75, iou_x: 0.95, iou_y: 0.78, iou_weighted: 0.90
