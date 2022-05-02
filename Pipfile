@@ -15,6 +15,7 @@ mypy = "*"
 python_version = "3.9"
 
 [scripts]
+qa = "sh -c 'pipenv run checkformat && pipenv run typecheck'"
 checkformat = "black --check ."
 format = "black ."
 typecheck = "mypy ."
