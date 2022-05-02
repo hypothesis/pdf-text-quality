@@ -575,6 +575,10 @@ def main():
     if args.debug:
         os.makedirs("debug", exist_ok=True)
 
+    # Resolution to render PDF at for OCR. Larger values result in slower
+    # but more accurate processing. The resolution needs to be high enough that
+    # the result is clearly readable. Depending on the PDF, there will be some
+    # threshold below which OCR accuracy drops off rapidly.
     dpi = 150
 
     for pdf_file in args.pdf_file:
