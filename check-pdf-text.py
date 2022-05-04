@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ElementTree
 
 import numpy as np
 from PIL import Image  # type: ignore
+from PIL import ImageDraw  # type: ignore
 
 
 @dataclass(frozen=True)
@@ -499,6 +500,19 @@ def compute_mask_metric(
     return {"mask_overlap": match_score}
 
 
+def draw_boxes(im: Image.Image, page: TextPage, color: str, width: int):
+    draw = ImageDraw.Draw(im)
+
+    for word in page.words:
+        box = word.box
+        draw.rectangle(
+            (box.left, box.top, box.right, box.bottom),
+            fill=None,
+            outline=color,
+            width=width,
+        )
+
+
 def process_page(
     pdf_renderer: PDFRenderer,
     page: int,
@@ -513,16 +527,22 @@ def process_page(
     Returns a dict of comparison metrics.
     """
     t = Timer()
-    image = pdf_renderer.render_to_image(page=page)
+    image_path = pdf_renderer.render_to_image(page=page)
     t.checkpoint("render_to_image")
     pdf_text_page = pdf_renderer.render_to_text(page=page)
     t.checkpoint("render_to_text")
 
     ocr = OCR()
-    ocr_text_page = ocr.run_ocr(image)
+    ocr_text_page = ocr.run_ocr(image_path)
     t.checkpoint("ocr")
 
     metrics: dict[str, float] = {}
+
+    if debug:
+        with Image.open(image_path) as im:
+            draw_boxes(im, ocr_text_page, color="rgb(0, 180, 0)", width=2)
+            draw_boxes(im, pdf_text_page, color="rgb(255,0,0)", width=3)
+            im.save("debug/boxes.jpg")
 
     if mask_metric:
         mask_metrics = compute_mask_metric(pdf_text_page, ocr_text_page, debug=debug)
@@ -544,12 +564,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("pdf_file", nargs="+", help="PDF file to check")
     parser.add_argument(
-        "--first-page",
-        type=int,
-        dest="first_page",
-        help="Number of first page to process",
-    )
-    parser.add_argument(
         "--iou-metrics",
         action=argparse.BooleanOptionalAction,
         dest="iou_metrics",
@@ -561,15 +575,30 @@ def main():
         dest="mask_metrics",
         default=False,
     )
+
+    parser.add_argument(
+        "--page",
+        type=int,
+        dest="page",
+        help="Number of first and last page to process",
+    )
+    parser.add_argument(
+        "--first-page",
+        type=int,
+        dest="first_page",
+        help="Number of first page to process",
+    )
     parser.add_argument(
         "--last-page", type=int, dest="last_page", help="Number of last page to process"
     )
+
     parser.add_argument(
         "--debug", action="store_true", dest="debug", help="Store debug outputs"
     )
     parser.add_argument(
         "--timing", action="store_true", dest="timing", help="Print timing info"
     )
+
     args = parser.parse_args()
 
     if args.debug:
@@ -590,10 +619,14 @@ def main():
             print(f"Error counting pages in {pdf_file}", repr(e))
             continue
 
-        first_page = args.first_page or 1
-        first_page = min(max(first_page, 1), page_count)
+        if args.page is None:
+            first_page = args.first_page or 1
+            last_page = args.last_page or page_count
+        else:
+            first_page = args.page
+            last_page = args.page
 
-        last_page = args.last_page or page_count
+        first_page = min(max(first_page, 1), page_count)
         last_page = min(max(last_page, first_page), page_count)
 
         file_basename = os.path.basename(pdf_file)
