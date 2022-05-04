@@ -564,12 +564,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("pdf_file", nargs="+", help="PDF file to check")
     parser.add_argument(
-        "--first-page",
-        type=int,
-        dest="first_page",
-        help="Number of first page to process",
-    )
-    parser.add_argument(
         "--iou-metrics",
         action=argparse.BooleanOptionalAction,
         dest="iou_metrics",
@@ -581,15 +575,30 @@ def main():
         dest="mask_metrics",
         default=False,
     )
+
+    parser.add_argument(
+        "--page",
+        type=int,
+        dest="page",
+        help="Number of first and last page to process",
+    )
+    parser.add_argument(
+        "--first-page",
+        type=int,
+        dest="first_page",
+        help="Number of first page to process",
+    )
     parser.add_argument(
         "--last-page", type=int, dest="last_page", help="Number of last page to process"
     )
+
     parser.add_argument(
         "--debug", action="store_true", dest="debug", help="Store debug outputs"
     )
     parser.add_argument(
         "--timing", action="store_true", dest="timing", help="Print timing info"
     )
+
     args = parser.parse_args()
 
     if args.debug:
@@ -610,10 +619,14 @@ def main():
             print(f"Error counting pages in {pdf_file}", repr(e))
             continue
 
-        first_page = args.first_page or 1
-        first_page = min(max(first_page, 1), page_count)
+        if args.page is None:
+            first_page = args.first_page or 1
+            last_page = args.last_page or page_count
+        else:
+            first_page = args.page
+            last_page = args.page
 
-        last_page = args.last_page or page_count
+        first_page = min(max(first_page, 1), page_count)
         last_page = min(max(last_page, first_page), page_count)
 
         file_basename = os.path.basename(pdf_file)
