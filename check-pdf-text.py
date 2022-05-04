@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ElementTree
 
 import numpy as np
 from PIL import Image  # type: ignore
+from PIL import ImageDraw  # type: ignore
 
 
 @dataclass(frozen=True)
@@ -499,6 +500,19 @@ def compute_mask_metric(
     return {"mask_overlap": match_score}
 
 
+def draw_boxes(im: Image.Image, page: TextPage, color: str):
+    draw = ImageDraw.Draw(im)
+
+    for word in page.words:
+        box = word.box
+        draw.rectangle(
+            (box.left, box.top, box.right, box.bottom),
+            fill=None,
+            outline=color,
+            width=3,
+        )
+
+
 def process_page(
     pdf_renderer: PDFRenderer,
     page: int,
@@ -513,16 +527,22 @@ def process_page(
     Returns a dict of comparison metrics.
     """
     t = Timer()
-    image = pdf_renderer.render_to_image(page=page)
+    image_path = pdf_renderer.render_to_image(page=page)
     t.checkpoint("render_to_image")
     pdf_text_page = pdf_renderer.render_to_text(page=page)
     t.checkpoint("render_to_text")
 
     ocr = OCR()
-    ocr_text_page = ocr.run_ocr(image)
+    ocr_text_page = ocr.run_ocr(image_path)
     t.checkpoint("ocr")
 
     metrics: dict[str, float] = {}
+
+    if debug:
+        with Image.open(image_path) as im:
+            draw_boxes(im, pdf_text_page, color="red")
+            draw_boxes(im, ocr_text_page, color="green")
+            im.save("debug/boxes.jpg")
 
     if mask_metric:
         mask_metrics = compute_mask_metric(pdf_text_page, ocr_text_page, debug=debug)
