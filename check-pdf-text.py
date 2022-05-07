@@ -10,6 +10,7 @@ import random
 import subprocess
 import sys
 import time
+from typing import Union
 import xml.etree.ElementTree as ElementTree
 
 import numpy as np
@@ -575,6 +576,12 @@ def main():
         dest="mask_metrics",
         default=False,
     )
+    parser.add_argument(
+        "--csv",
+        help="Output metrics in CSV format (one line per page)",
+        action="store_true",
+        dest="csv",
+    )
 
     parser.add_argument(
         "--page",
@@ -631,8 +638,12 @@ def main():
 
         file_basename = os.path.basename(pdf_file)
 
-        print(f'Checking text pages {first_page} to {last_page} in "{file_basename}"')
+        if not args.csv:
+            print(
+                f'Checking text pages {first_page} to {last_page} in "{file_basename}"'
+            )
 
+        csv_writer: Union[csv.DictWriter, None] = None
         for page in range(first_page, last_page + 1):
             try:
                 metrics = process_page(
@@ -643,10 +654,24 @@ def main():
                     iou_metric=args.iou_metrics,
                     timing=args.timing,
                 )
-                formatted_metrics = [
-                    f"{key}: {value:.2f}" for key, value in metrics.items()
-                ]
-                print(f"Page {page}:", ", ".join(formatted_metrics))
+                if args.csv:
+                    # Initialize the CSV writer after generating the metrics
+                    # for the first output page, because we need to know the
+                    # metric names before writing the CSV header.
+                    #
+                    # We assume that the metrics will be the same for all pages.
+                    if not csv_writer:
+                        csv_fields = ["file", "page", *metrics.keys()]
+                        csv_writer = csv.DictWriter(sys.stdout, csv_fields)
+                        csv_writer.writeheader()
+                    row = {"file": pdf_file, "page": str(page)}
+                    row.update(metrics)
+                    csv_writer.writerow(row)
+                else:
+                    formatted_metrics = [
+                        f"{key}: {value:.2f}" for key, value in metrics.items()
+                    ]
+                    print(f"Page {page}:", ", ".join(formatted_metrics))
 
             except Exception as e:
                 print(
