@@ -620,7 +620,10 @@ def main():
     # threshold below which OCR accuracy drops off rapidly.
     dpi = 150
 
-    for pdf_file in args.pdf_file:
+    csv_writer: Union[csv.DictWriter, None] = None
+    file_count = len(args.pdf_file)
+
+    for file_index, pdf_file in enumerate(args.pdf_file):
         pdf_renderer = PDFRenderer(file_path=pdf_file, dpi=dpi)
 
         try:
@@ -641,12 +644,11 @@ def main():
 
         file_basename = os.path.basename(pdf_file)
 
-        if not args.csv:
-            print(
-                f'Checking text pages {first_page} to {last_page} in "{file_basename}"'
-            )
+        print(
+            f'Checking pages {first_page} to {last_page} in "{file_basename}" (file {file_index+1}/{file_count}',
+            file=sys.stderr,
+        )
 
-        csv_writer: Union[csv.DictWriter, None] = None
         for page in range(first_page, last_page + 1):
             try:
                 metrics = process_page(
