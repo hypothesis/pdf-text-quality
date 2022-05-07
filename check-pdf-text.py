@@ -608,6 +608,9 @@ def main():
 
     args = parser.parse_args()
 
+    # Make this script work with `tee`. See https://stackoverflow.com/a/68341808/434243.
+    sys.stdout.reconfigure(line_buffering=True)  # type: ignore
+
     if args.debug:
         os.makedirs("debug", exist_ok=True)
 
