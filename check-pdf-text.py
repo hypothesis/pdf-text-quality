@@ -613,6 +613,20 @@ class CSVOutputWriter(OutputWriter):
         self.csv_writer.writerow(fields)
 
 
+def windows(start, end, window_size):
+    """
+    Iterate over offsets for windows in the range [start, end].
+
+    For example `windows(0, 6, 2)` yields `(0, 1)`, `(2, 3)`, `(4, 5)`, `(6, 6)`.
+
+    :param start: Start of first window
+    :param end: End (inclusive) of last window
+    :param window_size: Maximum size of each window.
+    """
+    for win_start in range(start, end + 1, window_size):
+        yield (win_start, min(win_start + window_size - 1, end))
+
+
 def process_file(
     pdf_file: str,
     out_writer: OutputWriter,
@@ -652,13 +666,12 @@ def process_file(
 
     file_basename = os.path.basename(pdf_file)
 
-    print(
-        f"Checking pages {first_page} to {last_page} in {file_basename}",
-        file=sys.stderr,
-    )
+    async def process_pages(first_page: int, last_page: int):
+        print(
+            f"Checking pages {first_page} to {last_page} in {file_basename}",
+            file=sys.stderr,
+        )
 
-    # Pass `last_page` as an argument to avoid complaint about it possibly being `None`.
-    async def process_pages(last_page: int):
         # Run OCR and text layer extraction on multiple pages concurrently.
         page_tasks = []
         page_indexes = [i for i in range(first_page, last_page + 1)]
@@ -692,7 +705,13 @@ def process_file(
                     file=sys.stderr,
                 )
 
-    asyncio.run(process_pages(cast(int, last_page)))
+    # Process up to 10 pages at a time. The window size aims to maximize
+    # throughput while not having an unbounded number of OCR / PDF rendering
+    # processes running at once, and providing regular progress updates.
+    for window_start, window_end in windows(
+        first_page, cast(int, last_page), window_size=10
+    ):
+        asyncio.run(process_pages(window_start, window_end))
 
 
 def main():
