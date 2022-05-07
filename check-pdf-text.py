@@ -1,6 +1,7 @@
 # See https://stackoverflow.com/a/33533505/434243
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 import argparse
 import asyncio
 import csv
@@ -12,7 +13,7 @@ import secrets
 import subprocess
 import sys
 import time
-from typing import Union
+from typing import cast, Protocol, Union
 import xml.etree.ElementTree as ElementTree
 
 import numpy as np
@@ -578,6 +579,122 @@ async def process_page(
     return metrics
 
 
+class OutputWriter(ABC):
+    @abstractmethod
+    def write_row(self, fields: dict[str, str]) -> None:
+        """Write a set of fields to the output."""
+
+
+class TextOutputWriter(OutputWriter):
+    """
+    Writer that outputs metrics as a comma-separated list of "key: value" pairs.
+    """
+
+    def write_row(self, fields: dict[str, str]):
+        formatted_fields = [f"{key}: {value}" for key, value in fields.items()]
+        print(", ".join(formatted_fields))
+
+
+class CSVOutputWriter(OutputWriter):
+    """
+    Writer that outputs metrics in CSV format.
+    """
+
+    csv_writer: Union[csv.DictWriter, None]
+
+    def __init__(self):
+        self.csv_writer = None
+
+    def write_row(self, fields: dict[str, str]):
+        if not self.csv_writer:
+            csv_fields = list(fields.keys())
+            self.csv_writer = csv.DictWriter(sys.stdout, csv_fields)
+            self.csv_writer.writeheader()
+        self.csv_writer.writerow(fields)
+
+
+def process_file(
+    pdf_file: str,
+    out_writer: OutputWriter,
+    debug=False,
+    first_page=1,
+    iou_metrics=False,
+    last_page: Union[int, None] = None,
+    mask_metrics=False,
+    print_timings=False,
+):
+    """
+    Check the PDF text layers for pages in `pdf_file`.
+
+    Extract the text layer and run OCR over pages in `pdf_file` and compare
+    them. Metrics about the quality of the match are written to `out_writer`.
+    """
+
+    # Resolution to render PDF at for OCR. Larger values result in slower
+    # but more accurate processing. The resolution needs to be high enough that
+    # the result is clearly readable. Depending on the PDF, there will be some
+    # threshold below which OCR accuracy drops off rapidly.
+    dpi = 150
+
+    pdf_renderer = PDFRenderer(file_path=pdf_file, dpi=dpi)
+
+    try:
+        page_count = pdf_renderer.count_pages()
+    except Exception as e:
+        print(f"Error counting pages in {pdf_file}", repr(e))
+        return
+
+    if last_page is None:
+        last_page = page_count
+
+    first_page = min(max(first_page, 1), page_count)
+    last_page = min(max(last_page, first_page), page_count)
+
+    file_basename = os.path.basename(pdf_file)
+
+    print(
+        f"Checking pages {first_page} to {last_page} in {file_basename}",
+        file=sys.stderr,
+    )
+
+    # Pass `last_page` as an argument to avoid complaint about it possibly being `None`.
+    async def process_pages(last_page: int):
+        # Run OCR and text layer extraction on multiple pages concurrently.
+        page_tasks = []
+        page_indexes = [i for i in range(first_page, last_page + 1)]
+        for page in page_indexes:
+            task = process_page(
+                pdf_renderer,
+                page=page,
+                debug=debug,
+                mask_metric=mask_metrics,
+                iou_metric=iou_metrics,
+                timing=print_timings,
+            )
+            page_tasks.append(task)
+        page_metrics = await asyncio.gather(*page_tasks)
+
+        # Process the results for all pages in order.
+        for i, page in enumerate(page_indexes):
+            try:
+                metrics = page_metrics[i]
+                row = {"file": pdf_file, "page": str(page)}
+                formatted_metrics = {
+                    key: f"{value:.2f}" for key, value in metrics.items()
+                }
+                row.update(formatted_metrics)
+                out_writer.write_row(row)
+
+            except Exception as e:
+                print(
+                    f"Error processing page {page} in {pdf_file}",
+                    repr(e),
+                    file=sys.stderr,
+                )
+
+    asyncio.run(process_pages(cast(int, last_page)))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("pdf_file", nargs="+", help="PDF file to check")
@@ -631,90 +748,36 @@ def main():
     if args.debug:
         os.makedirs("debug", exist_ok=True)
 
-    # Resolution to render PDF at for OCR. Larger values result in slower
-    # but more accurate processing. The resolution needs to be high enough that
-    # the result is clearly readable. Depending on the PDF, there will be some
-    # threshold below which OCR accuracy drops off rapidly.
-    dpi = 150
-
-    csv_writer: Union[csv.DictWriter, None] = None
     file_count = len(args.pdf_file)
 
+    if args.csv:
+        out_writer = CSVOutputWriter()
+    else:
+        out_writer = TextOutputWriter()
+
     for file_index, pdf_file in enumerate(args.pdf_file):
-        pdf_renderer = PDFRenderer(file_path=pdf_file, dpi=dpi)
-
-        try:
-            page_count = pdf_renderer.count_pages()
-        except Exception as e:
-            print(f"Error counting pages in {pdf_file}", repr(e))
-            continue
-
-        if args.page is None:
-            first_page = args.first_page or 1
-            last_page = args.last_page or page_count
-        else:
+        if args.page:
             first_page = args.page
             last_page = args.page
-
-        first_page = min(max(first_page, 1), page_count)
-        last_page = min(max(last_page, first_page), page_count)
-
-        file_basename = os.path.basename(pdf_file)
+        else:
+            first_page = args.first_page or 1
+            last_page = args.last_page or None
 
         print(
-            f'Checking pages {first_page} to {last_page} in "{file_basename}" (file {file_index+1}/{file_count})',
+            f"Checking {pdf_file} (file {file_index+1}/{file_count})",
             file=sys.stderr,
         )
 
-        async def process_pages():
-            nonlocal csv_writer
-
-            # Run OCR and text layer extraction on multiple pages concurrently.
-            page_tasks = []
-            page_indexes = [i for i in range(first_page, last_page + 1)]
-            for page in page_indexes:
-                task = process_page(
-                    pdf_renderer,
-                    page=page,
-                    debug=args.debug,
-                    mask_metric=args.mask_metrics,
-                    iou_metric=args.iou_metrics,
-                    timing=args.timing,
-                )
-                page_tasks.append(task)
-            page_metrics = await asyncio.gather(*page_tasks)
-
-            # Process the results for all pages in order.
-            for i, page in enumerate(page_indexes):
-                try:
-                    metrics = page_metrics[i]
-                    if args.csv:
-                        # Initialize the CSV writer after generating the metrics
-                        # for the first output page, because we need to know the
-                        # metric names before writing the CSV header.
-                        #
-                        # We assume that the metrics will be the same for all pages.
-                        if not csv_writer:
-                            csv_fields = ["file", "page", *metrics.keys()]
-                            csv_writer = csv.DictWriter(sys.stdout, csv_fields)
-                            csv_writer.writeheader()
-                        row = {"file": pdf_file, "page": str(page)}
-                        row.update(metrics)
-                        csv_writer.writerow(row)
-                    else:
-                        formatted_metrics = [
-                            f"{key}: {value:.2f}" for key, value in metrics.items()
-                        ]
-                        print(f"Page {page}:", ", ".join(formatted_metrics))
-
-                except Exception as e:
-                    print(
-                        f"Error processing page {page} in {pdf_file}",
-                        repr(e),
-                        file=sys.stderr,
-                    )
-
-        asyncio.run(process_pages())
+        process_file(
+            pdf_file,
+            out_writer,
+            first_page=first_page,
+            last_page=last_page,
+            debug=args.debug,
+            mask_metrics=args.mask_metrics,
+            iou_metrics=args.iou_metrics,
+            print_timings=args.timing,
+        )
 
 
 if __name__ == "__main__":
