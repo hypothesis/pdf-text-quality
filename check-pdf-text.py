@@ -662,7 +662,7 @@ def main():
         file_basename = os.path.basename(pdf_file)
 
         print(
-            f'Checking pages {first_page} to {last_page} in "{file_basename}" (file {file_index+1}/{file_count}',
+            f'Checking pages {first_page} to {last_page} in "{file_basename}" (file {file_index+1}/{file_count})',
             file=sys.stderr,
         )
 
