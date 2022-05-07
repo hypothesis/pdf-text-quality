@@ -151,7 +151,9 @@ async def run_tool_async(command: str, args: list[str]):
         raise Exception(f"Command {command} failed (status {proc.returncode})")
 
 
+# nb. Might want to replace this with `tempfile` to automate temp file cleanup
 def gen_temp_filename(prefix: str, suffix="") -> str:
+    """Generate a temporary filename."""
     random_part = secrets.token_hex(8)
     return f"/tmp/{prefix}-{random_part}{suffix}"
 
@@ -290,6 +292,10 @@ class OCR:
         img = Image.open(image)
 
         out_base = gen_temp_filename("ocr-result")
+
+        # We might want to set `OMP_THREAD_LIMIT=1` here to improve throughput
+        # when Tesseract is being run for multiple pages in parallel.
+        # See https://github.com/tesseract-ocr/tesseract/blob/main/doc/tesseract.1.asc#environment-variables.
         await run_tool_async("tesseract", [image, out_base, "-l", "eng", "tsv"])
         out_path = out_base + ".tsv"
         with open(out_path) as tsv_file:
