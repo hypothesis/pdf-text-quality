@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import csv
 from dataclasses import dataclass
 from math import ceil
 import os
 import random
+import secrets
 import subprocess
 import sys
 import time
@@ -137,12 +139,21 @@ class Timer:
             print(f"  {event}: {delta}")
 
 
-def run_tool(command: str, args: list[str]):
+async def run_tool_async(command: str, args: list[str]):
     """
     Run a command and return the exit status.
     """
-    proc = subprocess.run([command, *args], capture_output=True)
-    proc.check_returncode()
+    proc = await asyncio.create_subprocess_exec(
+        command, *args, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    await proc.communicate()
+    if proc.returncode != 0:
+        raise Exception(f"Command {command} failed (status {proc.returncode})")
+
+
+def gen_temp_filename(prefix: str, suffix="") -> str:
+    random_part = secrets.token_hex(8)
+    return f"/tmp/{prefix}-{random_part}{suffix}"
 
 
 def iter_lines(text: str):
@@ -173,12 +184,12 @@ class PDFRenderer:
             info[field] = value
         return int(info["Pages"])
 
-    def render_to_image(self, page: int) -> str:
+    async def render_to_image(self, page: int) -> str:
         """
         Render a page from a PDF to a JPEG image.
         """
-        out_base = "/tmp/pdf-render-image-result"
-        run_tool(
+        out_base = gen_temp_filename("pdf-render-image-result")
+        await run_tool_async(
             "pdftocairo",
             [
                 "-f",
@@ -195,14 +206,14 @@ class PDFRenderer:
         )
         return out_base + ".jpg"
 
-    def render_to_text(self, page: int) -> TextPage:
+    async def render_to_text(self, page: int) -> TextPage:
         """
         Extract text with bounding boxes from a PDF page.
         """
 
         # - Generate text file path
-        out_path = "/tmp/pdf-render-text-result.html"
-        run_tool(
+        out_path = gen_temp_filename("pdf-render-text-result", suffix=".html")
+        await run_tool_async(
             "pdftotext",
             [
                 "-f",
@@ -272,14 +283,14 @@ class OCR:
     OCR uses performs Optical Character Recognition on the pixels of an image.
     """
 
-    def run_ocr(self, image: str) -> TextPage:
+    async def run_ocr(self, image: str) -> TextPage:
         """
         Extract text from an image using OCR.
         """
         img = Image.open(image)
 
-        out_base = "/tmp/ocr-result"
-        run_tool("tesseract", [image, out_base, "-l", "eng", "tsv"])
+        out_base = gen_temp_filename("ocr-result")
+        await run_tool_async("tesseract", [image, out_base, "-l", "eng", "tsv"])
         out_path = out_base + ".tsv"
         with open(out_path) as tsv_file:
             reader = csv.DictReader(
@@ -514,7 +525,7 @@ def draw_boxes(im: Image.Image, page: TextPage, color: str, width: int):
         )
 
 
-def process_page(
+async def process_page(
     pdf_renderer: PDFRenderer,
     page: int,
     debug=False,
@@ -528,13 +539,13 @@ def process_page(
     Returns a dict of comparison metrics.
     """
     t = Timer()
-    image_path = pdf_renderer.render_to_image(page=page)
+    image_path = await pdf_renderer.render_to_image(page=page)
     t.checkpoint("render_to_image")
-    pdf_text_page = pdf_renderer.render_to_text(page=page)
+    pdf_text_page = await pdf_renderer.render_to_text(page=page)
     t.checkpoint("render_to_text")
 
     ocr = OCR()
-    ocr_text_page = ocr.run_ocr(image_path)
+    ocr_text_page = await ocr.run_ocr(image_path)
     t.checkpoint("ocr")
 
     metrics: dict[str, float] = {}
@@ -649,9 +660,14 @@ def main():
             file=sys.stderr,
         )
 
-        for page in range(first_page, last_page + 1):
-            try:
-                metrics = process_page(
+        async def process_pages():
+            nonlocal csv_writer
+
+            # Run OCR and text layer extraction on multiple pages concurrently.
+            page_tasks = []
+            page_indexes = [i for i in range(first_page, last_page + 1)]
+            for page in page_indexes:
+                task = process_page(
                     pdf_renderer,
                     page=page,
                     debug=args.debug,
@@ -659,31 +675,40 @@ def main():
                     iou_metric=args.iou_metrics,
                     timing=args.timing,
                 )
-                if args.csv:
-                    # Initialize the CSV writer after generating the metrics
-                    # for the first output page, because we need to know the
-                    # metric names before writing the CSV header.
-                    #
-                    # We assume that the metrics will be the same for all pages.
-                    if not csv_writer:
-                        csv_fields = ["file", "page", *metrics.keys()]
-                        csv_writer = csv.DictWriter(sys.stdout, csv_fields)
-                        csv_writer.writeheader()
-                    row = {"file": pdf_file, "page": str(page)}
-                    row.update(metrics)
-                    csv_writer.writerow(row)
-                else:
-                    formatted_metrics = [
-                        f"{key}: {value:.2f}" for key, value in metrics.items()
-                    ]
-                    print(f"Page {page}:", ", ".join(formatted_metrics))
+                page_tasks.append(task)
+            page_metrics = await asyncio.gather(*page_tasks)
 
-            except Exception as e:
-                print(
-                    f"Error processing page {page} in {pdf_file}",
-                    repr(e),
-                    file=sys.stderr,
-                )
+            # Process the results for all pages in order.
+            for i, page in enumerate(page_indexes):
+                try:
+                    metrics = page_metrics[i]
+                    if args.csv:
+                        # Initialize the CSV writer after generating the metrics
+                        # for the first output page, because we need to know the
+                        # metric names before writing the CSV header.
+                        #
+                        # We assume that the metrics will be the same for all pages.
+                        if not csv_writer:
+                            csv_fields = ["file", "page", *metrics.keys()]
+                            csv_writer = csv.DictWriter(sys.stdout, csv_fields)
+                            csv_writer.writeheader()
+                        row = {"file": pdf_file, "page": str(page)}
+                        row.update(metrics)
+                        csv_writer.writerow(row)
+                    else:
+                        formatted_metrics = [
+                            f"{key}: {value:.2f}" for key, value in metrics.items()
+                        ]
+                        print(f"Page {page}:", ", ".join(formatted_metrics))
+
+                except Exception as e:
+                    print(
+                        f"Error processing page {page} in {pdf_file}",
+                        repr(e),
+                        file=sys.stderr,
+                    )
+
+        asyncio.run(process_pages())
 
 
 if __name__ == "__main__":
