@@ -600,7 +600,7 @@ class CSVOutputWriter(OutputWriter):
     Writer that outputs metrics in CSV format.
     """
 
-    csv_writer: Union[csv.DictWriter, None]
+    csv_writer: Optional[csv.DictWriter]
 
     def __init__(self):
         self.csv_writer = None
@@ -633,7 +633,7 @@ def process_file(
     debug=False,
     first_page=1,
     iou_metrics=False,
-    last_page: Union[int, None] = None,
+    last_page: Optional[int] = None,
     mask_metrics=False,
     print_timings=False,
 ):
