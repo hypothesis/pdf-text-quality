@@ -613,7 +613,7 @@ class CSVOutputWriter(OutputWriter):
         self.csv_writer.writerow(fields)
 
 
-def windows(start, end, window_size):
+def windows(start: int, end: int, window_size: int):
     """
     Iterate over offsets for windows in the range [start, end].
 
