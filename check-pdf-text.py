@@ -6,6 +6,8 @@ import argparse
 import asyncio
 import csv
 from dataclasses import dataclass
+import dataclasses
+import json
 from io import BytesIO, StringIO
 from math import ceil
 import os
@@ -539,6 +541,7 @@ async def process_page(
     mask_metric=True,
     iou_metric=True,
     timing=False,
+    save_prefix: Optional[str] = None,
 ) -> dict[str, float]:
     """
     Extract the PDF text layer from a page and compare it against OCR output.
@@ -555,13 +558,23 @@ async def process_page(
     ocr_text_page = await ocr.run_ocr(image_data)
     t.checkpoint("ocr")
 
-    metrics: dict[str, float] = {}
+    if save_prefix:
+        with (
+            open(f"{save_prefix}-image.jpg", "wb") as img_file,
+            open(f"{save_prefix}-pdf-text.json", "w") as pdf_text_file,
+            open(f"{save_prefix}-ocr-text.json", "w") as ocr_text_file,
+        ):
+            img_file.write(image_data)
+            json.dump(dataclasses.asdict(pdf_text_page), pdf_text_file)
+            json.dump(dataclasses.asdict(ocr_text_page), ocr_text_file)
 
     if debug:
         with (BytesIO(image_data) as img_io, Image.open(image_data) as im):
             draw_boxes(im, ocr_text_page, color="rgb(0, 180, 0)", width=2)
             draw_boxes(im, pdf_text_page, color="rgb(255,0,0)", width=3)
             im.save("debug/boxes.jpg")
+
+    metrics: dict[str, float] = {}
 
     if mask_metric:
         mask_metrics = compute_mask_metric(pdf_text_page, ocr_text_page, debug=debug)
@@ -636,12 +649,16 @@ def process_file(
     last_page: Optional[int] = None,
     mask_metrics=False,
     print_timings=False,
+    save_dir: Optional[str] = None,
 ):
     """
     Check the PDF text layers for pages in `pdf_file`.
 
     Extract the text layer and run OCR over pages in `pdf_file` and compare
     them. Metrics about the quality of the match are written to `out_writer`.
+
+    If `save_dir` is set, intermediate outputs including the rendered page images
+    and PDF/OCR text pages are saved to that directory.
     """
 
     # Resolution to render PDF at for OCR. Larger values result in slower
@@ -665,6 +682,11 @@ def process_file(
     last_page = min(max(last_page, first_page), page_count)
 
     file_basename = os.path.basename(pdf_file)
+    if save_dir:
+        save_prefix = f"{save_dir}/{file_basename}"
+        os.makedirs(save_prefix, exist_ok=True)
+    else:
+        save_prefix = None
 
     async def process_pages(first_page: int, last_page: int):
         print(
@@ -676,6 +698,7 @@ def process_file(
         page_tasks = []
         page_indexes = [i for i in range(first_page, last_page + 1)]
         for page in page_indexes:
+            page_save_prefix = f"{save_prefix}/page-{page}" if save_prefix else None
             task = process_page(
                 pdf_renderer,
                 page=page,
@@ -683,6 +706,7 @@ def process_file(
                 mask_metric=mask_metrics,
                 iou_metric=iou_metrics,
                 timing=print_timings,
+                save_prefix=page_save_prefix,
             )
             page_tasks.append(task)
         page_metrics = await asyncio.gather(*page_tasks)
@@ -758,6 +782,12 @@ def main():
     parser.add_argument(
         "--timing", action="store_true", dest="timing", help="Print timing info"
     )
+    parser.add_argument(
+        "--save-dir",
+        type=str,
+        dest="save_dir",
+        help="Save rendered outputs to specified dir",
+    )
 
     args = parser.parse_args()
 
@@ -766,6 +796,9 @@ def main():
 
     if args.debug:
         os.makedirs("debug", exist_ok=True)
+
+    if args.save_dir:
+        os.makedirs(args.save_dir, exist_ok=True)
 
     file_count = len(args.pdf_file)
 
@@ -796,6 +829,7 @@ def main():
             mask_metrics=args.mask_metrics,
             iou_metrics=args.iou_metrics,
             print_timings=args.timing,
+            save_dir=args.save_dir,
         )
 
 
