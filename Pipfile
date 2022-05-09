@@ -10,6 +10,7 @@ numpy = "*"
 [dev-packages]
 black = "*"
 mypy = "*"
+types-pillow = "*"
 
 [requires]
 python_version = "3.9"
@@ -18,5 +19,5 @@ python_version = "3.9"
 qa = "sh -c 'pipenv run checkformat && pipenv run typecheck'"
 checkformat = "black --check ."
 format = "black ."
-typecheck = "mypy ."
+typecheck = "mypy --strict ."
 check-pdf = "python check-pdf-text.py"

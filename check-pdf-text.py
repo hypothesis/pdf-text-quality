@@ -16,12 +16,13 @@ import secrets
 import subprocess
 import sys
 import time
-from typing import cast, Optional, Protocol, Union
+from typing import cast, Iterator, Optional, Protocol, Union
 import xml.etree.ElementTree as ElementTree
 
 import numpy as np
-from PIL import Image  # type: ignore
-from PIL import ImageDraw  # type: ignore
+from numpy import typing as npt
+from PIL import Image
+from PIL import ImageDraw
 
 
 @dataclass(frozen=True)
@@ -30,11 +31,11 @@ class Line:
     end: float
 
     @property
-    def length(self):
+    def length(self) -> float:
         return self.end - self.start
 
     @property
-    def valid(self):
+    def valid(self) -> bool:
         return self.end >= self.start
 
     def intersect(self, other: Line) -> Line:
@@ -48,7 +49,7 @@ class Line:
         return Line(start=min(self.start, other.start), end=max(self.end, other.end))
 
     @classmethod
-    def empty(self):
+    def empty(cls) -> Line:
         return Line(start=0, end=0)
 
 
@@ -60,32 +61,32 @@ class Rect:
     bottom: float
 
     @property
-    def width(self):
+    def width(self) -> float:
         return self.right - self.left
 
     @property
-    def height(self):
+    def height(self) -> float:
         return self.bottom - self.top
 
     @property
-    def area(self):
+    def area(self) -> float:
         if not self.valid:
             return 0.0
         return self.width * self.height
 
     @property
-    def valid(self):
+    def valid(self) -> bool:
         return self.right >= self.left and self.bottom >= self.top
 
     @property
-    def horizontal_span(self):
+    def horizontal_span(self) -> Line:
         return Line(start=self.left, end=self.right)
 
     @property
-    def vertical_span(self):
+    def vertical_span(self) -> Line:
         return Line(start=self.top, end=self.bottom)
 
-    def intersect(self, other: Rect):
+    def intersect(self, other: Rect) -> Rect:
         if not self.valid or not other.valid:
             return self.empty()
         return Rect(
@@ -95,7 +96,7 @@ class Rect:
             bottom=min(self.bottom, other.bottom),
         )
 
-    def union(self, other: Rect):
+    def union(self, other: Rect) -> Rect:
         if not self.valid or not other.valid:
             return self.empty()
         return Rect(
@@ -106,7 +107,7 @@ class Rect:
         )
 
     @classmethod
-    def empty(cls):
+    def empty(cls) -> Rect:
         return Rect(left=0, right=0, top=0, bottom=0)
 
 
@@ -127,17 +128,17 @@ class Timer:
     Utility for recording and reporting duration of steps in an operation.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.checkpoints: list[tuple[str, float]] = []
         self.last_checkpoint = time.monotonic()
 
-    def checkpoint(self, name: str):
+    def checkpoint(self, name: str) -> None:
         checkpoint = time.monotonic()
         delta = checkpoint - self.last_checkpoint
         self.last_checkpoint = checkpoint
         self.checkpoints.append((name, delta))
 
-    def print(self, description: str):
+    def print(self, description: str) -> None:
         print(f"{description} timings:")
         for event, delta in self.checkpoints:
             print(f"  {event}: {delta}")
@@ -161,7 +162,7 @@ async def run_command(
     return stdout
 
 
-def iter_lines(text: str):
+def iter_lines(text: str) -> Iterator[str]:
     for line in text.split("\n"):
         line = line.strip()
         if line:
@@ -173,7 +174,7 @@ class PDFRenderer:
     Render PDF pages to images and extract the text layer from a page.
     """
 
-    def __init__(self, file_path, dpi=150):
+    def __init__(self, file_path: str, dpi: int = 150) -> None:
         self.dpi = dpi
         self.file_path = file_path
 
@@ -240,7 +241,7 @@ class PDFRenderer:
 
         # Strip out illegal characters. pdftotext doesn't escape eg.
         # control characters appearing in words.
-        def is_legal_xml_char(char: str):
+        def is_legal_xml_char(char: str) -> bool:
             code = ord(char)
             return code >= 32 or code == 0x09 or code == 0x0A or code == 0x0D
 
@@ -338,14 +339,17 @@ class OCR:
         return text_page
 
 
-def create_text_page_mask(page: TextPage) -> np.ndarray:
+Mask = npt.NDArray[np.bool_]
+
+
+def create_text_page_mask(page: TextPage) -> Mask:
     """
     Create a binary mask indicating regions of text in a page.
     """
 
     width = int(page.box.width)
     height = int(page.box.height)
-    mask = np.zeros((height, width), dtype=np.bool_)
+    mask: Mask = np.zeros((height, width), dtype=np.bool_)
 
     for word in page.words:
         left = int(word.box.left)
@@ -357,7 +361,7 @@ def create_text_page_mask(page: TextPage) -> np.ndarray:
     return mask
 
 
-def compare_masks(mask_a: np.ndarray, mask_b: np.ndarray) -> float:
+def compare_masks(mask_a: Mask, mask_b: Mask) -> float:
     """
     Compare two binary masks.
 
@@ -390,7 +394,7 @@ def compare_masks(mask_a: np.ndarray, mask_b: np.ndarray) -> float:
     return 1 - diff_count / max_count
 
 
-def save_mask(mask: np.ndarray, path: str):
+def save_mask(mask: Mask, path: str) -> None:
     """
     Save a binary mask to an image.
     """
@@ -452,9 +456,9 @@ def compute_iou_metrics(
         pdf_text_words.remove(best_pdf_word)
 
     # Compute a localization score over matched words
-    iou_sum = 0
-    iou_sum_x = 0
-    iou_sum_y = 0
+    iou_sum = 0.0
+    iou_sum_x = 0.0
+    iou_sum_y = 0.0
 
     for ocr_word, pdf_word in word_matches:
         ocr_word_x_span = ocr_word.box.horizontal_span
@@ -499,7 +503,7 @@ def compute_iou_metrics(
 
 
 def compute_mask_metric(
-    pdf_text_page: TextPage, ocr_text_page: TextPage, debug=False
+    pdf_text_page: TextPage, ocr_text_page: TextPage, debug: bool = False
 ) -> dict[str, float]:
     """
     Compare a PDF text layer against OCR output using binary masks of the text
@@ -521,7 +525,7 @@ def compute_mask_metric(
     return {"mask_overlap": match_score}
 
 
-def draw_boxes(im: Image.Image, page: TextPage, color: str, width: int):
+def draw_boxes(im: Image.Image, page: TextPage, color: str, width: int) -> None:
     draw = ImageDraw.Draw(im)
 
     for word in page.words:
@@ -537,10 +541,10 @@ def draw_boxes(im: Image.Image, page: TextPage, color: str, width: int):
 async def process_page(
     pdf_renderer: PDFRenderer,
     page: int,
-    debug=False,
-    mask_metric=True,
-    iou_metric=True,
-    timing=False,
+    debug: bool = False,
+    mask_metric: bool = True,
+    iou_metric: bool = True,
+    timing: bool = False,
     save_prefix: Optional[str] = None,
 ) -> dict[str, float]:
     """
@@ -603,7 +607,7 @@ class TextOutputWriter(OutputWriter):
     Writer that outputs metrics as a comma-separated list of "key: value" pairs.
     """
 
-    def write_row(self, fields: dict[str, str]):
+    def write_row(self, fields: dict[str, str]) -> None:
         formatted_fields = [f"{key}: {value}" for key, value in fields.items()]
         print(", ".join(formatted_fields))
 
@@ -613,12 +617,12 @@ class CSVOutputWriter(OutputWriter):
     Writer that outputs metrics in CSV format.
     """
 
-    csv_writer: Optional[csv.DictWriter]
+    csv_writer: Optional[csv.DictWriter[str]]
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.csv_writer = None
 
-    def write_row(self, fields: dict[str, str]):
+    def write_row(self, fields: dict[str, str]) -> None:
         if not self.csv_writer:
             csv_fields = list(fields.keys())
             self.csv_writer = csv.DictWriter(sys.stdout, csv_fields)
@@ -626,7 +630,7 @@ class CSVOutputWriter(OutputWriter):
         self.csv_writer.writerow(fields)
 
 
-def windows(start: int, end: int, window_size: int):
+def windows(start: int, end: int, window_size: int) -> Iterator[tuple[int, int]]:
     """
     Iterate over offsets for windows in the range [start, end].
 
@@ -643,14 +647,14 @@ def windows(start: int, end: int, window_size: int):
 def process_file(
     pdf_file: str,
     out_writer: OutputWriter,
-    debug=False,
-    first_page=1,
-    iou_metrics=False,
+    debug: bool = False,
+    first_page: int = 1,
+    iou_metrics: bool = False,
     last_page: Optional[int] = None,
-    mask_metrics=False,
-    print_timings=False,
+    mask_metrics: bool = False,
+    print_timings: bool = False,
     save_dir: Optional[str] = None,
-):
+) -> None:
     """
     Check the PDF text layers for pages in `pdf_file`.
 
@@ -688,7 +692,7 @@ def process_file(
     else:
         save_prefix = None
 
-    async def process_pages(first_page: int, last_page: int):
+    async def process_pages(first_page: int, last_page: int) -> None:
         print(
             f"Checking pages {first_page} to {last_page} in {file_basename}",
             file=sys.stderr,
@@ -732,13 +736,11 @@ def process_file(
     # Process up to 10 pages at a time. The window size aims to maximize
     # throughput while not having an unbounded number of OCR / PDF rendering
     # processes running at once, and providing regular progress updates.
-    for window_start, window_end in windows(
-        first_page, cast(int, last_page), window_size=10
-    ):
+    for window_start, window_end in windows(first_page, last_page, window_size=10):
         asyncio.run(process_pages(window_start, window_end))
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("pdf_file", nargs="+", help="PDF file to check")
     parser.add_argument(
@@ -803,7 +805,7 @@ def main():
     file_count = len(args.pdf_file)
 
     if args.csv:
-        out_writer = CSVOutputWriter()
+        out_writer: OutputWriter = CSVOutputWriter()
     else:
         out_writer = TextOutputWriter()
 
@@ -831,6 +833,8 @@ def main():
             print_timings=args.timing,
             save_dir=args.save_dir,
         )
+
+    return 0
 
 
 if __name__ == "__main__":
