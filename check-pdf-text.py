@@ -1,16 +1,20 @@
 # See https://stackoverflow.com/a/33533505/434243
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 import argparse
+import asyncio
 import csv
 from dataclasses import dataclass
+from io import BytesIO, StringIO
 from math import ceil
 import os
 import random
+import secrets
 import subprocess
 import sys
 import time
-from typing import Union
+from typing import cast, Optional, Protocol, Union
 import xml.etree.ElementTree as ElementTree
 
 import numpy as np
@@ -137,12 +141,22 @@ class Timer:
             print(f"  {event}: {delta}")
 
 
-def run_tool(command: str, args: list[str]):
+async def run_command(
+    command: str, args: list[str], stdin: Optional[bytes] = None
+) -> bytes:
     """
-    Run a command and return the exit status.
+    Run a command and return its stdout output.
+
+    Raises if the command exits with a non-zero status.
     """
-    proc = subprocess.run([command, *args], capture_output=True)
-    proc.check_returncode()
+    stdin_mode = subprocess.PIPE if stdin is not None else None
+    proc = await asyncio.create_subprocess_exec(
+        command, *args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=stdin_mode
+    )
+    stdout, stderr = await proc.communicate(stdin)
+    if proc.returncode != 0:
+        raise Exception(f"Command {command} failed (status {proc.returncode})")
+    return stdout
 
 
 def iter_lines(text: str):
@@ -173,12 +187,11 @@ class PDFRenderer:
             info[field] = value
         return int(info["Pages"])
 
-    def render_to_image(self, page: int) -> str:
+    async def render_to_image(self, page: int) -> bytes:
         """
         Render a page from a PDF to a JPEG image.
         """
-        out_base = "/tmp/pdf-render-image-result"
-        run_tool(
+        img_data = await run_command(
             "pdftocairo",
             [
                 "-f",
@@ -190,79 +203,76 @@ class PDFRenderer:
                 "-jpeg",
                 "-singlefile",
                 self.file_path,
-                out_base,
+                # Write to stdout
+                "-",
             ],
         )
-        return out_base + ".jpg"
+        return img_data
 
-    def render_to_text(self, page: int) -> TextPage:
+    async def render_to_text(self, page: int) -> TextPage:
         """
         Extract text with bounding boxes from a PDF page.
         """
 
-        # - Generate text file path
-        out_path = "/tmp/pdf-render-text-result.html"
-        run_tool(
-            "pdftotext",
-            [
-                "-f",
-                str(page),
-                "-l",
-                str(page),
-                "-r",
-                str(self.dpi),
-                "-bbox",
-                self.file_path,
-                out_path,
-            ],
-        )
-
-        with open(out_path) as xml_file:
-            xml_content = xml_file.read()
-
-            # Strip out the XHTML namespace. This simplifies the `find` calls
-            # below.
-            xml_content = xml_content.replace(
-                'xmlns="http://www.w3.org/1999/xhtml"', ""
+        xml_content = (
+            await run_command(
+                "pdftotext",
+                [
+                    "-f",
+                    str(page),
+                    "-l",
+                    str(page),
+                    "-r",
+                    str(self.dpi),
+                    "-bbox",
+                    self.file_path,
+                    # Write to stdout
+                    "-",
+                ],
             )
+        ).decode()
 
-            # Strip out illegal characters. pdftotext doesn't escape eg.
-            # control characters appearing in words.
-            def is_legal_xml_char(char: str):
-                code = ord(char)
-                return code >= 32 or code == 0x09 or code == 0x0A or code == 0x0D
+        # Strip out the XHTML namespace. This simplifies the `find` calls
+        # below.
+        xml_content = xml_content.replace('xmlns="http://www.w3.org/1999/xhtml"', "")
 
-            xml_content = "".join([c for c in xml_content if is_legal_xml_char(c)])
+        # Strip out illegal characters. pdftotext doesn't escape eg.
+        # control characters appearing in words.
+        def is_legal_xml_char(char: str):
+            code = ord(char)
+            return code >= 32 or code == 0x09 or code == 0x0A or code == 0x0D
 
-            tree = ElementTree.fromstring(xml_content)
+        xml_content = "".join([c for c in xml_content if is_legal_xml_char(c)])
 
-            page_el = tree.find(".//page")
+        tree = ElementTree.fromstring(xml_content)
 
-            if not page_el:
-                raise Exception('"page" element not found in output')
+        page_el = tree.find(".//page")
 
-            # The `width` and `height` attributes do not change to reflect the
-            # `-r` argument to `pdftotext`, but instead always reflect the
-            # default 72 DPI, so we have to scale + ceil them.
-            dpi_scale = self.dpi / 72.0
-            width = ceil(float(page_el.attrib["width"]) * dpi_scale)
-            height = ceil(float(page_el.attrib["height"]) * dpi_scale)
+        if not page_el:
+            raise Exception('"page" element not found in output')
 
-            text_box = Rect(left=0.0, top=0.0, right=width, bottom=height)
-            text_words = []
-            word_els = page_el.findall("word")
-            for word_el in word_els:
-                text_word = TextWord(
-                    text=str(word_el.text),
-                    box=Rect(
-                        left=float(word_el.attrib["xMin"]),
-                        top=float(word_el.attrib["yMin"]),
-                        right=float(word_el.attrib["xMax"]),
-                        bottom=float(word_el.attrib["yMax"]),
-                    ),
-                )
-                text_words.append(text_word)
-            text_page = TextPage(box=text_box, words=text_words)
+        # The `width` and `height` attributes do not change to reflect the
+        # `-r` argument to `pdftotext`, but instead always reflect the
+        # default 72 DPI, so we have to scale + ceil them.
+        dpi_scale = self.dpi / 72.0
+        width = ceil(float(page_el.attrib["width"]) * dpi_scale)
+        height = ceil(float(page_el.attrib["height"]) * dpi_scale)
+
+        text_box = Rect(left=0.0, top=0.0, right=width, bottom=height)
+        text_words = []
+        word_els = page_el.findall("word")
+        for word_el in word_els:
+            text_word = TextWord(
+                text=str(word_el.text),
+                box=Rect(
+                    left=float(word_el.attrib["xMin"]),
+                    top=float(word_el.attrib["yMin"]),
+                    right=float(word_el.attrib["xMax"]),
+                    bottom=float(word_el.attrib["yMax"]),
+                ),
+            )
+            text_words.append(text_word)
+        text_page = TextPage(box=text_box, words=text_words)
 
         return text_page
 
@@ -272,16 +282,24 @@ class OCR:
     OCR uses performs Optical Character Recognition on the pixels of an image.
     """
 
-    def run_ocr(self, image: str) -> TextPage:
+    async def run_ocr(self, image: bytes) -> TextPage:
         """
         Extract text from an image using OCR.
         """
-        img = Image.open(image)
+        # We might want to set `OMP_THREAD_LIMIT=1` here to improve throughput
+        # when Tesseract is being run for multiple pages in parallel.
+        # See https://github.com/tesseract-ocr/tesseract/blob/main/doc/tesseract.1.asc#environment-variables.
+        tsv_content = (
+            await run_command(
+                "tesseract", ["stdin", "stdout", "-l", "eng", "tsv"], stdin=image
+            )
+        ).decode()
 
-        out_base = "/tmp/ocr-result"
-        run_tool("tesseract", [image, out_base, "-l", "eng", "tsv"])
-        out_path = out_base + ".tsv"
-        with open(out_path) as tsv_file:
+        with (
+            StringIO(tsv_content) as tsv_file,
+            BytesIO(image) as img_io,
+            Image.open(img_io) as img,
+        ):
             reader = csv.DictReader(
                 tsv_file,
                 delimiter="\t",
@@ -514,7 +532,7 @@ def draw_boxes(im: Image.Image, page: TextPage, color: str, width: int):
         )
 
 
-def process_page(
+async def process_page(
     pdf_renderer: PDFRenderer,
     page: int,
     debug=False,
@@ -528,19 +546,19 @@ def process_page(
     Returns a dict of comparison metrics.
     """
     t = Timer()
-    image_path = pdf_renderer.render_to_image(page=page)
+    image_data = await pdf_renderer.render_to_image(page=page)
     t.checkpoint("render_to_image")
-    pdf_text_page = pdf_renderer.render_to_text(page=page)
+    pdf_text_page = await pdf_renderer.render_to_text(page=page)
     t.checkpoint("render_to_text")
 
     ocr = OCR()
-    ocr_text_page = ocr.run_ocr(image_path)
+    ocr_text_page = await ocr.run_ocr(image_data)
     t.checkpoint("ocr")
 
     metrics: dict[str, float] = {}
 
     if debug:
-        with Image.open(image_path) as im:
+        with (BytesIO(image_data) as img_io, Image.open(image_data) as im):
             draw_boxes(im, ocr_text_page, color="rgb(0, 180, 0)", width=2)
             draw_boxes(im, pdf_text_page, color="rgb(255,0,0)", width=3)
             im.save("debug/boxes.jpg")
@@ -559,6 +577,141 @@ def process_page(
         t.print("process_page")
 
     return metrics
+
+
+class OutputWriter(ABC):
+    @abstractmethod
+    def write_row(self, fields: dict[str, str]) -> None:
+        """Write a set of fields to the output."""
+
+
+class TextOutputWriter(OutputWriter):
+    """
+    Writer that outputs metrics as a comma-separated list of "key: value" pairs.
+    """
+
+    def write_row(self, fields: dict[str, str]):
+        formatted_fields = [f"{key}: {value}" for key, value in fields.items()]
+        print(", ".join(formatted_fields))
+
+
+class CSVOutputWriter(OutputWriter):
+    """
+    Writer that outputs metrics in CSV format.
+    """
+
+    csv_writer: Optional[csv.DictWriter]
+
+    def __init__(self):
+        self.csv_writer = None
+
+    def write_row(self, fields: dict[str, str]):
+        if not self.csv_writer:
+            csv_fields = list(fields.keys())
+            self.csv_writer = csv.DictWriter(sys.stdout, csv_fields)
+            self.csv_writer.writeheader()
+        self.csv_writer.writerow(fields)
+
+
+def windows(start: int, end: int, window_size: int):
+    """
+    Iterate over offsets for windows in the range [start, end].
+
+    For example `windows(0, 6, 2)` yields `(0, 1)`, `(2, 3)`, `(4, 5)`, `(6, 6)`.
+
+    :param start: Start of first window
+    :param end: End (inclusive) of last window
+    :param window_size: Maximum size of each window.
+    """
+    for win_start in range(start, end + 1, window_size):
+        yield (win_start, min(win_start + window_size - 1, end))
+
+
+def process_file(
+    pdf_file: str,
+    out_writer: OutputWriter,
+    debug=False,
+    first_page=1,
+    iou_metrics=False,
+    last_page: Optional[int] = None,
+    mask_metrics=False,
+    print_timings=False,
+):
+    """
+    Check the PDF text layers for pages in `pdf_file`.
+
+    Extract the text layer and run OCR over pages in `pdf_file` and compare
+    them. Metrics about the quality of the match are written to `out_writer`.
+    """
+
+    # Resolution to render PDF at for OCR. Larger values result in slower
+    # but more accurate processing. The resolution needs to be high enough that
+    # the result is clearly readable. Depending on the PDF, there will be some
+    # threshold below which OCR accuracy drops off rapidly.
+    dpi = 150
+
+    pdf_renderer = PDFRenderer(file_path=pdf_file, dpi=dpi)
+
+    try:
+        page_count = pdf_renderer.count_pages()
+    except Exception as e:
+        print(f"Error counting pages in {pdf_file}", repr(e))
+        return
+
+    if last_page is None:
+        last_page = page_count
+
+    first_page = min(max(first_page, 1), page_count)
+    last_page = min(max(last_page, first_page), page_count)
+
+    file_basename = os.path.basename(pdf_file)
+
+    async def process_pages(first_page: int, last_page: int):
+        print(
+            f"Checking pages {first_page} to {last_page} in {file_basename}",
+            file=sys.stderr,
+        )
+
+        # Run OCR and text layer extraction on multiple pages concurrently.
+        page_tasks = []
+        page_indexes = [i for i in range(first_page, last_page + 1)]
+        for page in page_indexes:
+            task = process_page(
+                pdf_renderer,
+                page=page,
+                debug=debug,
+                mask_metric=mask_metrics,
+                iou_metric=iou_metrics,
+                timing=print_timings,
+            )
+            page_tasks.append(task)
+        page_metrics = await asyncio.gather(*page_tasks)
+
+        # Process the results for all pages in order.
+        for i, page in enumerate(page_indexes):
+            try:
+                metrics = page_metrics[i]
+                row = {"file": pdf_file, "page": str(page)}
+                formatted_metrics = {
+                    key: f"{value:.2f}" for key, value in metrics.items()
+                }
+                row.update(formatted_metrics)
+                out_writer.write_row(row)
+
+            except Exception as e:
+                print(
+                    f"Error processing page {page} in {pdf_file}",
+                    repr(e),
+                    file=sys.stderr,
+                )
+
+    # Process up to 10 pages at a time. The window size aims to maximize
+    # throughput while not having an unbounded number of OCR / PDF rendering
+    # processes running at once, and providing regular progress updates.
+    for window_start, window_end in windows(
+        first_page, cast(int, last_page), window_size=10
+    ):
+        asyncio.run(process_pages(window_start, window_end))
 
 
 def main():
@@ -614,76 +767,36 @@ def main():
     if args.debug:
         os.makedirs("debug", exist_ok=True)
 
-    # Resolution to render PDF at for OCR. Larger values result in slower
-    # but more accurate processing. The resolution needs to be high enough that
-    # the result is clearly readable. Depending on the PDF, there will be some
-    # threshold below which OCR accuracy drops off rapidly.
-    dpi = 150
-
-    csv_writer: Union[csv.DictWriter, None] = None
     file_count = len(args.pdf_file)
 
+    if args.csv:
+        out_writer = CSVOutputWriter()
+    else:
+        out_writer = TextOutputWriter()
+
     for file_index, pdf_file in enumerate(args.pdf_file):
-        pdf_renderer = PDFRenderer(file_path=pdf_file, dpi=dpi)
-
-        try:
-            page_count = pdf_renderer.count_pages()
-        except Exception as e:
-            print(f"Error counting pages in {pdf_file}", repr(e))
-            continue
-
-        if args.page is None:
-            first_page = args.first_page or 1
-            last_page = args.last_page or page_count
-        else:
+        if args.page:
             first_page = args.page
             last_page = args.page
-
-        first_page = min(max(first_page, 1), page_count)
-        last_page = min(max(last_page, first_page), page_count)
-
-        file_basename = os.path.basename(pdf_file)
+        else:
+            first_page = args.first_page or 1
+            last_page = args.last_page or None
 
         print(
-            f'Checking pages {first_page} to {last_page} in "{file_basename}" (file {file_index+1}/{file_count}',
+            f"Checking {pdf_file} (file {file_index+1}/{file_count})",
             file=sys.stderr,
         )
 
-        for page in range(first_page, last_page + 1):
-            try:
-                metrics = process_page(
-                    pdf_renderer,
-                    page=page,
-                    debug=args.debug,
-                    mask_metric=args.mask_metrics,
-                    iou_metric=args.iou_metrics,
-                    timing=args.timing,
-                )
-                if args.csv:
-                    # Initialize the CSV writer after generating the metrics
-                    # for the first output page, because we need to know the
-                    # metric names before writing the CSV header.
-                    #
-                    # We assume that the metrics will be the same for all pages.
-                    if not csv_writer:
-                        csv_fields = ["file", "page", *metrics.keys()]
-                        csv_writer = csv.DictWriter(sys.stdout, csv_fields)
-                        csv_writer.writeheader()
-                    row = {"file": pdf_file, "page": str(page)}
-                    row.update(metrics)
-                    csv_writer.writerow(row)
-                else:
-                    formatted_metrics = [
-                        f"{key}: {value:.2f}" for key, value in metrics.items()
-                    ]
-                    print(f"Page {page}:", ", ".join(formatted_metrics))
-
-            except Exception as e:
-                print(
-                    f"Error processing page {page} in {pdf_file}",
-                    repr(e),
-                    file=sys.stderr,
-                )
+        process_file(
+            pdf_file,
+            out_writer,
+            first_page=first_page,
+            last_page=last_page,
+            debug=args.debug,
+            mask_metrics=args.mask_metrics,
+            iou_metrics=args.iou_metrics,
+            print_timings=args.timing,
+        )
 
 
 if __name__ == "__main__":
