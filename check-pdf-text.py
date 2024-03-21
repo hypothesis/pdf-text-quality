@@ -573,7 +573,7 @@ async def process_page(
             json.dump(dataclasses.asdict(ocr_text_page), ocr_text_file)
 
     if debug:
-        with (BytesIO(image_data) as img_io, Image.open(image_data) as im):
+        with BytesIO(image_data) as img_io, Image.open(image_data) as im:
             draw_boxes(im, ocr_text_page, color="rgb(0, 180, 0)", width=2)
             draw_boxes(im, pdf_text_page, color="rgb(255,0,0)", width=3)
             im.save("debug/boxes.jpg")
